@@ -18,6 +18,9 @@ import OrderScreen, { type OrderItemInput } from './OrderScreen';
 import OrderHistoryScreen, {
   type OrderHistoryRecord,
 } from './OrderHistoryScreen';
+import StatisticsScreen, {
+  type HourlySalesStat,
+} from './StatisticsScreen';
 
 type Props = {
   session: Session;
@@ -25,7 +28,7 @@ type Props = {
   onSignOut: () => Promise<void>;
 };
 
-type Tab = 'recap' | 'order' | 'history';
+type Tab = 'recap' | 'order' | 'history' | 'statistics';
 
 type SaleItemRow = {
   id: string;
@@ -68,6 +71,7 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
   const [todayItems, setTodayItems] = useState(0);
   const [menus, setMenus] = useState<MenuRecord[]>([]);
   const [orderHistory, setOrderHistory] = useState<OrderHistoryRecord[]>([]);
+  const [hourlyStats, setHourlyStats] = useState<HourlySalesStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -183,6 +187,52 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
             })),
         }))
       );
+
+      const itemCountBySale = new Map<string, number>();
+      saleItems.forEach((item) => {
+        itemCountBySale.set(
+          item.sale_id,
+          (itemCountBySale.get(item.sale_id) ?? 0) + Number(item.quantity)
+        );
+      });
+
+      const statsByHour = new Map<number, HourlySalesStat>();
+      todaySales.forEach((sale) => {
+        const hour = new Date(sale.sold_at).getHours();
+        const current = statsByHour.get(hour) ?? {
+          hour,
+          revenue: 0,
+          orders: 0,
+          items: 0,
+        };
+
+        current.revenue += Number(sale.total_amount);
+        current.orders += 1;
+        current.items += itemCountBySale.get(sale.id) ?? 0;
+        statsByHour.set(hour, current);
+      });
+
+      const recordedHours = Array.from(statsByHour.keys()).sort((a, b) => a - b);
+      if (recordedHours.length === 0) {
+        setHourlyStats([]);
+      } else {
+        const firstHour = recordedHours[0];
+        const lastHour = recordedHours[recordedHours.length - 1];
+        const completeStats: HourlySalesStat[] = [];
+
+        for (let hour = firstHour; hour <= lastHour; hour += 1) {
+          completeStats.push(
+            statsByHour.get(hour) ?? {
+              hour,
+              revenue: 0,
+              orders: 0,
+              items: 0,
+            }
+          );
+        }
+
+        setHourlyStats(completeStats);
+      }
     } catch (error) {
       Alert.alert(
         'Gagal memuat data',
@@ -347,7 +397,7 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
           onAddMenu={() => setMenuFormVisible(true)}
           onSubmit={submitOrder}
         />
-      ) : (
+      ) : activeTab === 'history' ? (
         <OrderHistoryScreen
           orders={orderHistory}
           loading={loading}
@@ -355,6 +405,12 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
           cancelingId={cancelingId}
           onRefresh={() => loadData(true)}
           onCancel={cancelOrder}
+        />
+      ) : (
+        <StatisticsScreen
+          stats={hourlyStats}
+          refreshing={refreshing}
+          onRefresh={() => loadData(true)}
         />
       )}
 
@@ -381,6 +437,22 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
         >
           <Text style={[styles.navText, activeTab === 'history' && styles.navTextActive]}>
             Riwayat
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[
+            styles.navButton,
+            activeTab === 'statistics' && styles.navButtonActive,
+          ]}
+          onPress={() => setActiveTab('statistics')}
+        >
+          <Text
+            style={[
+              styles.navText,
+              activeTab === 'statistics' && styles.navTextActive,
+            ]}
+          >
+            Statistik
           </Text>
         </Pressable>
       </View>
