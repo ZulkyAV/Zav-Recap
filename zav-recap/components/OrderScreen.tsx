@@ -20,6 +20,7 @@ type Props = {
   menus: MenuRecord[];
   submitting: boolean;
   onAddMenu: () => void;
+  onManageMenus: () => void;
   onSubmit: (items: OrderItemInput[], note: string) => Promise<boolean>;
 };
 
@@ -31,6 +32,7 @@ export default function OrderScreen({
   menus,
   submitting,
   onAddMenu,
+  onManageMenus,
   onSubmit,
 }: Props) {
   const [quantities, setQuantities] = useState<Record<string, number>>({});
@@ -81,9 +83,14 @@ export default function OrderScreen({
             <Text style={styles.title}>Orderan baru</Text>
             <Text style={styles.subtitle}>Pilih jumlah produk yang dipesan</Text>
           </View>
-          <Pressable style={styles.addMenuButton} onPress={onAddMenu}>
-            <Text style={styles.addMenuText}>＋ Menu</Text>
-          </Pressable>
+          <View style={styles.menuActions}>
+            <Pressable style={styles.manageButton} onPress={onManageMenus}>
+              <Text style={styles.manageText}>Kelola</Text>
+            </Pressable>
+            <Pressable style={styles.addMenuButton} onPress={onAddMenu}>
+              <Text style={styles.addMenuText}>＋ Menu</Text>
+            </Pressable>
+          </View>
         </View>
 
         {menus.length === 0 ? (
@@ -216,10 +223,20 @@ const styles = StyleSheet.create({
   },
   title: { color: '#FFFFFF', fontSize: 25, fontWeight: '800' },
   subtitle: { color: '#857E8E', fontSize: 12, marginTop: 5 },
+  menuActions: { flexDirection: 'row', alignItems: 'center' },
+  manageButton: {
+    borderWidth: 1,
+    borderColor: '#3B3148',
+    borderRadius: 11,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    marginRight: 7,
+  },
+  manageText: { color: '#BDB4C7', fontSize: 11, fontWeight: '800' },
   addMenuButton: {
     backgroundColor: '#2C1A40',
     borderRadius: 11,
-    paddingHorizontal: 13,
+    paddingHorizontal: 11,
     paddingVertical: 10,
   },
   addMenuText: { color: '#C9A7FF', fontSize: 12, fontWeight: '800' },

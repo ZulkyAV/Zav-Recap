@@ -14,6 +14,7 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase } from '../lib/supabase';
 import type { BusinessRecord } from './BusinessSetup';
 import MenuForm, { type MenuRecord } from './MenuForm';
+import MenuManager from './MenuManager';
 import OrderScreen, { type OrderItemInput } from './OrderScreen';
 import OrderHistoryScreen, {
   type OrderHistoryRecord,
@@ -76,7 +77,10 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
+  const [togglingMenuId, setTogglingMenuId] = useState<string | null>(null);
   const [menuFormVisible, setMenuFormVisible] = useState(false);
+  const [menuManagerVisible, setMenuManagerVisible] = useState(false);
+  const [editingMenu, setEditingMenu] = useState<MenuRecord | null>(null);
 
   const loadData = useCallback(async (showRefresh = false) => {
     if (showRefresh) setRefreshing(true);
@@ -93,7 +97,6 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
             'id, user_id, business_id, name, description, price, image_path, category, is_available'
           )
           .eq('business_id', business.id)
-          .eq('is_available', true)
           .order('created_at', { ascending: true }),
         supabase
           .from('sales')
@@ -248,8 +251,57 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
     loadData();
   }, [loadData]);
 
-  function handleMenuCreated(menu: MenuRecord) {
-    setMenus((current) => [...current, menu]);
+  function handleMenuSaved(menu: MenuRecord) {
+    setMenus((current) => {
+      const exists = current.some((item) => item.id === menu.id);
+      if (!exists) return [...current, menu];
+      return current.map((item) => (item.id === menu.id ? menu : item));
+    });
+  }
+
+  function openAddMenu() {
+    setEditingMenu(null);
+    setMenuFormVisible(true);
+  }
+
+  function openEditMenu(menu: MenuRecord) {
+    setMenuManagerVisible(false);
+    setEditingMenu(menu);
+    setMenuFormVisible(true);
+  }
+
+  function closeMenuForm() {
+    setMenuFormVisible(false);
+    setEditingMenu(null);
+  }
+
+  async function toggleMenu(menu: MenuRecord) {
+    setTogglingMenuId(menu.id);
+
+    try {
+      const { data, error } = await supabase
+        .from('menus')
+        .update({ is_available: !menu.is_available })
+        .eq('id', menu.id)
+        .eq('user_id', session.user.id)
+        .eq('business_id', business.id)
+        .select(
+          'id, user_id, business_id, name, description, price, image_path, category, is_available'
+        )
+        .single();
+
+      if (error) throw error;
+
+      handleMenuSaved({
+        ...(data as MenuRecord),
+        price: Number(data.price),
+        image_url: menu.image_url ?? null,
+      });
+    } catch (error) {
+      Alert.alert('Status menu gagal diubah', getErrorMessage(error));
+    } finally {
+      setTogglingMenuId(null);
+    }
   }
 
   async function submitOrder(items: OrderItemInput[], note: string) {
@@ -392,9 +444,10 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
         </ScrollView>
       ) : activeTab === 'order' ? (
         <OrderScreen
-          menus={menus}
+          menus={menus.filter((menu) => menu.is_available)}
           submitting={submitting}
-          onAddMenu={() => setMenuFormVisible(true)}
+          onAddMenu={openAddMenu}
+          onManageMenus={() => setMenuManagerVisible(true)}
           onSubmit={submitOrder}
         />
       ) : activeTab === 'history' ? (
@@ -461,8 +514,18 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
         visible={menuFormVisible}
         session={session}
         business={business}
-        onClose={() => setMenuFormVisible(false)}
-        onCreated={handleMenuCreated}
+        editingMenu={editingMenu}
+        onClose={closeMenuForm}
+        onSaved={handleMenuSaved}
+      />
+
+      <MenuManager
+        visible={menuManagerVisible}
+        menus={menus}
+        togglingId={togglingMenuId}
+        onClose={() => setMenuManagerVisible(false)}
+        onEdit={openEditMenu}
+        onToggle={toggleMenu}
       />
     </SafeAreaView>
   );

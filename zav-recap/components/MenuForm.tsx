@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -36,8 +36,9 @@ type Props = {
   visible: boolean;
   session: Session;
   business: BusinessRecord;
+  editingMenu?: MenuRecord | null;
   onClose: () => void;
-  onCreated: (menu: MenuRecord) => void;
+  onSaved: (menu: MenuRecord) => void;
 };
 
 function formatNumberInput(value: string) {
@@ -49,15 +50,28 @@ export default function MenuForm({
   visible,
   session,
   business,
+  editingMenu = null,
   onClose,
-  onCreated,
+  onSaved,
 }: Props) {
   const [name, setName] = useState('');
   const [price, setPrice] = useState('');
   const [category, setCategory] = useState('');
   const [description, setDescription] = useState('');
   const [image, setImage] = useState<ImagePicker.ImagePickerAsset | null>(null);
+  const [removeExistingImage, setRemoveExistingImage] = useState(false);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!visible) return;
+
+    setName(editingMenu?.name ?? '');
+    setPrice(editingMenu ? String(editingMenu.price) : '');
+    setCategory(editingMenu?.category ?? '');
+    setDescription(editingMenu?.description ?? '');
+    setImage(null);
+    setRemoveExistingImage(false);
+  }, [visible, editingMenu]);
 
   function resetForm() {
     setName('');
@@ -65,6 +79,7 @@ export default function MenuForm({
     setCategory('');
     setDescription('');
     setImage(null);
+    setRemoveExistingImage(false);
   }
 
   function handleClose() {
@@ -95,7 +110,16 @@ export default function MenuForm({
 
     if (!result.canceled) {
       setImage(result.assets[0]);
+      setRemoveExistingImage(false);
     }
+  }
+
+  function getErrorMessage(error: unknown) {
+    if (error instanceof Error) return error.message;
+    if (error && typeof error === 'object' && 'message' in error) {
+      return String((error as { message: unknown }).message);
+    }
+    return 'Terjadi kesalahan yang belum diketahui.';
   }
 
   async function handleSave() {
@@ -113,7 +137,10 @@ export default function MenuForm({
     }
 
     setLoading(true);
-    let imagePath: string | null = null;
+    let uploadedImagePath: string | null = null;
+    let finalImagePath = removeExistingImage
+      ? null
+      : editingMenu?.image_path ?? null;
 
     try {
       if (image) {
@@ -122,48 +149,74 @@ export default function MenuForm({
         }
 
         const uniqueName = String(Date.now()) + '-' + Math.random().toString(36).slice(2);
-        imagePath =
+        uploadedImagePath =
           session.user.id + '/' + business.id + '/' + uniqueName + '.jpg';
 
         const { error: uploadError } = await supabase.storage
           .from('menu-images')
-          .upload(imagePath, decode(image.base64), {
+          .upload(uploadedImagePath, decode(image.base64), {
             contentType: 'image/jpeg',
             cacheControl: '3600',
             upsert: false,
           });
 
         if (uploadError) throw uploadError;
+        finalImagePath = uploadedImagePath;
       }
 
-      const { data, error } = await supabase
-        .from('menus')
-        .insert({
-          user_id: session.user.id,
-          business_id: business.id,
-          name: normalizedName,
-          description: description.trim() || null,
-          price: numericPrice,
-          image_path: imagePath,
-          category: category.trim() || null,
-          is_available: true,
-        })
-        .select(
-          'id, user_id, business_id, name, description, price, image_path, category, is_available'
-        )
-        .single();
+      const menuValues = {
+        name: normalizedName,
+        description: description.trim() || null,
+        price: numericPrice,
+        image_path: finalImagePath,
+        category: category.trim() || null,
+      };
+
+      const columns =
+        'id, user_id, business_id, name, description, price, image_path, category, is_available';
+
+      const saveResult = editingMenu
+        ? await supabase
+            .from('menus')
+            .update(menuValues)
+            .eq('id', editingMenu.id)
+            .eq('user_id', session.user.id)
+            .eq('business_id', business.id)
+            .select(columns)
+            .single()
+        : await supabase
+            .from('menus')
+            .insert({
+              ...menuValues,
+              user_id: session.user.id,
+              business_id: business.id,
+              is_available: true,
+            })
+            .select(columns)
+            .single();
+
+      const { data, error } = saveResult;
 
       if (error) throw error;
 
       let imageUrl: string | null = null;
-      if (imagePath) {
+      if (finalImagePath) {
         const { data: signedData } = await supabase.storage
           .from('menu-images')
-          .createSignedUrl(imagePath, 60 * 60);
+          .createSignedUrl(finalImagePath, 60 * 60);
         imageUrl = signedData?.signedUrl ?? null;
       }
 
-      onCreated({
+      if (
+        editingMenu?.image_path &&
+        editingMenu.image_path !== finalImagePath
+      ) {
+        await supabase.storage
+          .from('menu-images')
+          .remove([editingMenu.image_path]);
+      }
+
+      onSaved({
         ...(data as MenuRecord),
         price: Number(data.price),
         image_url: imageUrl,
@@ -171,18 +224,22 @@ export default function MenuForm({
       resetForm();
       onClose();
     } catch (error) {
-      if (imagePath) {
-        await supabase.storage.from('menu-images').remove([imagePath]);
+      if (uploadedImagePath) {
+        await supabase.storage.from('menu-images').remove([uploadedImagePath]);
       }
 
       Alert.alert(
-        'Gagal menambah menu',
-        error instanceof Error ? error.message : 'Terjadi kesalahan.'
+        editingMenu ? 'Gagal memperbarui menu' : 'Gagal menambah menu',
+        getErrorMessage(error)
       );
     } finally {
       setLoading(false);
     }
   }
+
+  const previewUri =
+    image?.uri ??
+    (!removeExistingImage ? editingMenu?.image_url ?? null : null);
 
   return (
     <Modal visible={visible} animationType="slide" onRequestClose={handleClose}>
@@ -196,8 +253,12 @@ export default function MenuForm({
         >
           <View style={styles.header}>
             <View>
-              <Text style={styles.eyebrow}>MENU BARU</Text>
-              <Text style={styles.title}>Tambah produk</Text>
+              <Text style={styles.eyebrow}>
+                {editingMenu ? 'EDIT MENU' : 'MENU BARU'}
+              </Text>
+              <Text style={styles.title}>
+                {editingMenu ? 'Perbarui produk' : 'Tambah produk'}
+              </Text>
             </View>
             <Pressable style={styles.closeButton} onPress={handleClose}>
               <Text style={styles.closeText}>Tutup</Text>
@@ -205,8 +266,8 @@ export default function MenuForm({
           </View>
 
           <Pressable style={styles.imagePicker} onPress={pickImage}>
-            {image ? (
-              <Image source={{ uri: image.uri }} style={styles.preview} />
+            {previewUri ? (
+              <Image source={{ uri: previewUri }} style={styles.preview} />
             ) : (
               <View style={styles.imagePlaceholder}>
                 <Text style={styles.imageIcon}>＋</Text>
@@ -216,11 +277,22 @@ export default function MenuForm({
             )}
           </Pressable>
 
-          {image && (
-            <Pressable style={styles.changeImage} onPress={pickImage}>
-              <Text style={styles.changeImageText}>Ganti foto</Text>
-            </Pressable>
-          )}
+          {previewUri ? (
+            <View style={styles.imageActions}>
+              <Pressable style={styles.changeImage} onPress={pickImage}>
+                <Text style={styles.changeImageText}>Ganti foto</Text>
+              </Pressable>
+              <Pressable
+                style={styles.removeImage}
+                onPress={() => {
+                  setImage(null);
+                  setRemoveExistingImage(true);
+                }}
+              >
+                <Text style={styles.removeImageText}>Hapus foto</Text>
+              </Pressable>
+            </View>
+          ) : null}
 
           <View style={styles.field}>
             <Text style={styles.label}>Nama menu</Text>
@@ -284,7 +356,9 @@ export default function MenuForm({
             {loading ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.saveText}>Simpan menu</Text>
+              <Text style={styles.saveText}>
+                {editingMenu ? 'Simpan perubahan' : 'Simpan menu'}
+              </Text>
             )}
           </Pressable>
         </ScrollView>
@@ -327,8 +401,11 @@ const styles = StyleSheet.create({
   imageIcon: { color: '#B98CFF', fontSize: 34, fontWeight: '300' },
   imageTitle: { color: '#E8E1EE', fontSize: 15, fontWeight: '700', marginTop: 7 },
   imageHint: { color: '#756E7E', fontSize: 11, marginTop: 5 },
-  changeImage: { alignSelf: 'flex-end', marginBottom: 18 },
+  imageActions: { flexDirection: 'row', justifyContent: 'flex-end', marginBottom: 18 },
+  changeImage: { marginLeft: 16 },
   changeImageText: { color: '#B98CFF', fontSize: 12, fontWeight: '700' },
+  removeImage: { marginLeft: 16 },
+  removeImageText: { color: '#F59E9E', fontSize: 12, fontWeight: '700' },
   field: { marginBottom: 18 },
   label: { color: '#E4DFEA', fontSize: 13, fontWeight: '700', marginBottom: 8 },
   input: {
