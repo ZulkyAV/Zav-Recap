@@ -1,24 +1,37 @@
 {
   "expo": {
-    "name": "zav-recap",
+    "name": "Zav Recap",
     "slug": "zav-recap",
-    "version": "1.0.0",
+    "version": "0.1.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Izinkan Zav Recap memilih foto untuk menu jualan.",
+          "cameraPermission": false,
+          "microphonePermission": false
+        }
+      ]
+    ],
     "splash": {
       "image": "./assets/splash-icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#ffffff"
+      "backgroundColor": "#09070F"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.zulkyav.zavrecap"
     },
     "android": {
+      "package": "com.zulkyav.zavrecap",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#09070F"
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false

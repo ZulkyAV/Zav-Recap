@@ -1,37 +1,81 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Pressable,
-  SafeAreaView,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
 import type { Session } from '@supabase/supabase-js';
 import Auth from './components/Auth';
+import BusinessSetup, {
+  type BusinessRecord,
+} from './components/BusinessSetup';
+import Dashboard from './components/Dashboard';
 import { supabase } from './lib/supabase';
 
 export default function App() {
+  return (
+    <SafeAreaProvider>
+      <AppContent />
+    </SafeAreaProvider>
+  );
+}
+
+function AppContent() {
   const [session, setSession] = useState<Session | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [business, setBusiness] = useState<BusinessRecord | null>(null);
+  const [businessLoading, setBusinessLoading] = useState(false);
+  const [businessError, setBusinessError] = useState<string | null>(null);
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => {
       setSession(data.session);
-      setLoading(false);
+      setAuthLoading(false);
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
-      setLoading(false);
+      setBusiness(null);
+      setBusinessError(null);
+      setAuthLoading(false);
     });
 
     return () => subscription.unsubscribe();
   }, []);
+
+  const loadBusiness = useCallback(async () => {
+    if (!session) return;
+
+    setBusinessLoading(true);
+    setBusinessError(null);
+
+    const { data, error } = await supabase
+      .from('businesses')
+      .select('id, user_id, name, recap_email')
+      .eq('user_id', session.user.id)
+      .maybeSingle();
+
+    if (error) {
+      setBusinessError(error.message);
+    } else {
+      setBusiness((data as BusinessRecord | null) ?? null);
+    }
+
+    setBusinessLoading(false);
+  }, [session]);
+
+  useEffect(() => {
+    if (session) {
+      loadBusiness();
+    }
+  }, [session, loadBusiness]);
 
   async function handleSignOut() {
     const { error } = await supabase.auth.signOut();
@@ -41,11 +85,12 @@ export default function App() {
     }
   }
 
-  if (loading) {
+  if (authLoading || (session && businessLoading)) {
     return (
       <View style={styles.loading}>
         <StatusBar style="light" />
         <ActivityIndicator size="large" color="#7C3AED" />
+        <Text style={styles.loadingText}>Menyiapkan Zav Recap...</Text>
       </View>
     );
   }
@@ -59,25 +104,35 @@ export default function App() {
     );
   }
 
-  return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar style="light" />
-
-      <View style={styles.content}>
-        <Text style={styles.badge}>LOGIN BERHASIL</Text>
-        <Text style={styles.title}>Selamat datang di Zav Recap</Text>
-        <Text style={styles.email}>{session.user.email}</Text>
-
-        <Text style={styles.description}>
-          Selanjutnya kita akan membuat profil usaha, modal awal, menu, dan
-          pencatatan penjualan.
-        </Text>
-
+  if (businessError) {
+    return (
+      <View style={styles.errorScreen}>
+        <StatusBar style="light" />
+        <Text style={styles.errorTitle}>Data usaha belum bisa dimuat</Text>
+        <Text style={styles.errorText}>{businessError}</Text>
+        <Pressable style={styles.retryButton} onPress={loadBusiness}>
+          <Text style={styles.retryText}>Coba lagi</Text>
+        </Pressable>
         <Pressable style={styles.signOutButton} onPress={handleSignOut}>
           <Text style={styles.signOutText}>Keluar</Text>
         </Pressable>
       </View>
-    </SafeAreaView>
+    );
+  }
+
+  return (
+    <>
+      <StatusBar style="light" />
+      {business ? (
+        <Dashboard
+          session={session}
+          business={business}
+          onSignOut={handleSignOut}
+        />
+      ) : (
+        <BusinessSetup session={session} onCreated={setBusiness} />
+      )}
+    </>
   );
 }
 
@@ -88,49 +143,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
-  container: {
+  loadingText: { color: '#8F879A', fontSize: 13, marginTop: 14 },
+  errorScreen: {
     flex: 1,
     backgroundColor: '#09070F',
-  },
-  content: {
-    flex: 1,
     justifyContent: 'center',
     padding: 28,
   },
-  badge: {
-    color: '#C9A7FF',
-    fontSize: 12,
-    fontWeight: '700',
-    letterSpacing: 1.4,
-    marginBottom: 14,
+  errorTitle: { color: '#FFFFFF', fontSize: 24, fontWeight: '800' },
+  errorText: { color: '#A9A3B4', fontSize: 14, lineHeight: 21, marginTop: 10 },
+  retryButton: {
+    backgroundColor: '#7C3AED',
+    borderRadius: 13,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginTop: 26,
   },
-  title: {
-    color: '#FFFFFF',
-    fontSize: 30,
-    fontWeight: '700',
-    lineHeight: 38,
-  },
-  email: {
-    color: '#A9A3B4',
-    fontSize: 15,
-    marginTop: 10,
-  },
-  description: {
-    color: '#8F879A',
-    fontSize: 15,
-    lineHeight: 23,
-    marginTop: 28,
-  },
+  retryText: { color: '#FFFFFF', fontWeight: '800' },
   signOutButton: {
     borderWidth: 1,
     borderColor: '#3B3148',
-    borderRadius: 12,
+    borderRadius: 13,
     paddingVertical: 14,
     alignItems: 'center',
-    marginTop: 32,
+    marginTop: 12,
   },
-  signOutText: {
-    color: '#D8D3DF',
-    fontWeight: '600',
-  },
+  signOutText: { color: '#D8D3DF', fontWeight: '700' },
 });
