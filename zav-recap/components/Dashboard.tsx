@@ -22,6 +22,9 @@ import OrderHistoryScreen, {
 import StatisticsScreen, {
   type HourlySalesStat,
 } from './StatisticsScreen';
+import BusinessSettingsScreen, {
+  type CapitalEntryRecord,
+} from './BusinessSettingsScreen';
 
 type Props = {
   session: Session;
@@ -29,7 +32,7 @@ type Props = {
   onSignOut: () => Promise<void>;
 };
 
-type Tab = 'recap' | 'order' | 'history' | 'statistics';
+type Tab = 'recap' | 'order' | 'history' | 'statistics' | 'settings';
 
 type SaleItemRow = {
   id: string;
@@ -66,7 +69,9 @@ function getTodayRange() {
 
 export default function Dashboard({ session, business, onSignOut }: Props) {
   const [activeTab, setActiveTab] = useState<Tab>('recap');
+  const [businessDetails, setBusinessDetails] = useState(business);
   const [initialCapital, setInitialCapital] = useState(0);
+  const [capitalEntries, setCapitalEntries] = useState<CapitalEntryRecord[]>([]);
   const [todayRevenue, setTodayRevenue] = useState(0);
   const [allRevenue, setAllRevenue] = useState(0);
   const [todayItems, setTodayItems] = useState(0);
@@ -78,6 +83,8 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [cancelingId, setCancelingId] = useState<string | null>(null);
   const [togglingMenuId, setTogglingMenuId] = useState<string | null>(null);
+  const [savingBusiness, setSavingBusiness] = useState(false);
+  const [addingCapital, setAddingCapital] = useState(false);
   const [menuFormVisible, setMenuFormVisible] = useState(false);
   const [menuManagerVisible, setMenuManagerVisible] = useState(false);
   const [editingMenu, setEditingMenu] = useState<MenuRecord | null>(null);
@@ -89,8 +96,9 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
       const [capitalResult, menusResult, salesResult] = await Promise.all([
         supabase
           .from('capital_entries')
-          .select('amount')
-          .eq('business_id', business.id),
+          .select('id, amount, entry_type, note, occurred_at, created_at')
+          .eq('business_id', business.id)
+          .order('occurred_at', { ascending: false }),
         supabase
           .from('menus')
           .select(
@@ -114,6 +122,12 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
           (sum, entry) => sum + Number(entry.amount),
           0
         )
+      );
+      setCapitalEntries(
+        (capitalResult.data ?? []).map((entry) => ({
+          ...(entry as CapitalEntryRecord),
+          amount: Number(entry.amount),
+        }))
       );
 
       const { start, end } = getTodayRange();
@@ -304,6 +318,57 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
     }
   }
 
+  async function updateBusinessDetails(name: string, recapEmail: string) {
+    setSavingBusiness(true);
+
+    try {
+      const { data, error } = await supabase
+        .from('businesses')
+        .update({ name, recap_email: recapEmail })
+        .eq('id', business.id)
+        .eq('user_id', session.user.id)
+        .select('id, user_id, name, recap_email')
+        .single();
+
+      if (error) throw error;
+
+      setBusinessDetails(data as BusinessRecord);
+      Alert.alert('Pengaturan tersimpan', 'Data usaha dan email recap sudah diperbarui.');
+      return true;
+    } catch (error) {
+      Alert.alert('Pengaturan gagal disimpan', getErrorMessage(error));
+      return false;
+    } finally {
+      setSavingBusiness(false);
+    }
+  }
+
+  async function addCapital(amount: number, note: string) {
+    setAddingCapital(true);
+
+    try {
+      const { error } = await supabase.from('capital_entries').insert({
+        user_id: session.user.id,
+        business_id: business.id,
+        entry_type: 'additional',
+        amount,
+        note: note.trim() || 'Tambahan modal usaha',
+        occurred_at: new Date().toISOString(),
+      });
+
+      if (error) throw error;
+
+      await loadData();
+      Alert.alert('Modal ditambahkan', `${formatRupiah(amount)} masuk ke total modal.`);
+      return true;
+    } catch (error) {
+      Alert.alert('Modal gagal ditambahkan', getErrorMessage(error));
+      return false;
+    } finally {
+      setAddingCapital(false);
+    }
+  }
+
   async function submitOrder(items: OrderItemInput[], note: string) {
     setSubmitting(true);
 
@@ -359,7 +424,7 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
       <View style={styles.header}>
         <View>
           <Text style={styles.brand}>Zav Recap</Text>
-          <Text style={styles.businessName}>{business.name}</Text>
+          <Text style={styles.businessName}>{businessDetails.name}</Text>
         </View>
 
         <Pressable style={styles.exitButton} onPress={onSignOut}>
@@ -438,7 +503,7 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
               Target pengiriman setiap Jumat pukul 23.55 WIB ke
             </Text>
             <Text style={styles.emailValue}>
-              {business.recap_email || session.user.email}
+              {businessDetails.recap_email || session.user.email}
             </Text>
           </View>
         </ScrollView>
@@ -459,11 +524,23 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
           onRefresh={() => loadData(true)}
           onCancel={cancelOrder}
         />
-      ) : (
+      ) : activeTab === 'statistics' ? (
         <StatisticsScreen
           stats={hourlyStats}
           refreshing={refreshing}
           onRefresh={() => loadData(true)}
+        />
+      ) : (
+        <BusinessSettingsScreen
+          business={businessDetails}
+          totalCapital={initialCapital}
+          capitalEntries={capitalEntries}
+          refreshing={refreshing}
+          savingBusiness={savingBusiness}
+          addingCapital={addingCapital}
+          onRefresh={() => loadData(true)}
+          onUpdateBusiness={updateBusinessDetails}
+          onAddCapital={addCapital}
         />
       )}
 
@@ -508,12 +585,28 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
             Statistik
           </Text>
         </Pressable>
+        <Pressable
+          style={[
+            styles.navButton,
+            activeTab === 'settings' && styles.navButtonActive,
+          ]}
+          onPress={() => setActiveTab('settings')}
+        >
+          <Text
+            style={[
+              styles.navText,
+              activeTab === 'settings' && styles.navTextActive,
+            ]}
+          >
+            Usaha
+          </Text>
+        </Pressable>
       </View>
 
       <MenuForm
         visible={menuFormVisible}
         session={session}
-        business={business}
+        business={businessDetails}
         editingMenu={editingMenu}
         onClose={closeMenuForm}
         onSaved={handleMenuSaved}
