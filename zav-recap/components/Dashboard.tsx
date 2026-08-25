@@ -15,6 +15,9 @@ import { supabase } from '../lib/supabase';
 import type { BusinessRecord } from './BusinessSetup';
 import MenuForm, { type MenuRecord } from './MenuForm';
 import OrderScreen, { type OrderItemInput } from './OrderScreen';
+import OrderHistoryScreen, {
+  type OrderHistoryRecord,
+} from './OrderHistoryScreen';
 
 type Props = {
   session: Session;
@@ -22,7 +25,15 @@ type Props = {
   onSignOut: () => Promise<void>;
 };
 
-type Tab = 'recap' | 'order';
+type Tab = 'recap' | 'order' | 'history';
+
+type SaleItemRow = {
+  id: string;
+  sale_id: string;
+  menu_id: string;
+  quantity: number | string;
+  unit_price: number | string;
+};
 
 function formatRupiah(value: number) {
   return 'Rp' + new Intl.NumberFormat('id-ID').format(Math.abs(value));
@@ -56,9 +67,11 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
   const [allRevenue, setAllRevenue] = useState(0);
   const [todayItems, setTodayItems] = useState(0);
   const [menus, setMenus] = useState<MenuRecord[]>([]);
+  const [orderHistory, setOrderHistory] = useState<OrderHistoryRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [cancelingId, setCancelingId] = useState<string | null>(null);
   const [menuFormVisible, setMenuFormVisible] = useState(false);
 
   const loadData = useCallback(async (showRefresh = false) => {
@@ -80,8 +93,9 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
           .order('created_at', { ascending: true }),
         supabase
           .from('sales')
-          .select('id, total_amount, sold_at')
-          .eq('business_id', business.id),
+          .select('id, total_amount, note, sold_at')
+          .eq('business_id', business.id)
+          .order('sold_at', { ascending: false }),
       ]);
 
       if (capitalResult.error) throw capitalResult.error;
@@ -109,19 +123,24 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
       );
 
       const todaySaleIds = todaySales.map((sale) => sale.id);
-      if (todaySaleIds.length > 0) {
+      let saleItems: SaleItemRow[] = [];
+
+      if (allSales.length > 0) {
         const { data: items, error } = await supabase
           .from('sale_items')
-          .select('quantity')
-          .in('sale_id', todaySaleIds);
+          .select('id, sale_id, menu_id, quantity, unit_price')
+          .in('sale_id', allSales.map((sale) => sale.id));
 
         if (error) throw error;
-        setTodayItems(
-          (items ?? []).reduce((sum, item) => sum + Number(item.quantity), 0)
-        );
-      } else {
-        setTodayItems(0);
+        saleItems = (items ?? []) as SaleItemRow[];
       }
+
+      const todaySaleIdSet = new Set(todaySaleIds);
+      setTodayItems(
+        saleItems
+          .filter((item) => todaySaleIdSet.has(item.sale_id))
+          .reduce((sum, item) => sum + Number(item.quantity), 0)
+      );
 
       const menuRows = (menusResult.data ?? []) as MenuRecord[];
       const menusWithUrls = await Promise.all(
@@ -142,10 +161,32 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
         })
       );
       setMenus(menusWithUrls);
+
+      const menuNames = new Map(
+        menuRows.map((menu) => [menu.id, menu.name] as const)
+      );
+
+      setOrderHistory(
+        allSales.map((sale) => ({
+          id: sale.id,
+          total_amount: Number(sale.total_amount),
+          note: sale.note,
+          sold_at: sale.sold_at,
+          items: saleItems
+            .filter((item) => item.sale_id === sale.id)
+            .map((item) => ({
+              id: item.id,
+              menu_id: item.menu_id,
+              menu_name: menuNames.get(item.menu_id) ?? 'Menu dihapus',
+              quantity: Number(item.quantity),
+              unit_price: Number(item.unit_price),
+            })),
+        }))
+      );
     } catch (error) {
       Alert.alert(
         'Gagal memuat data',
-        error instanceof Error ? error.message : 'Terjadi kesalahan.'
+        getErrorMessage(error)
       );
     } finally {
       setLoading(false);
@@ -186,6 +227,26 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
       return false;
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function cancelOrder(saleId: string) {
+    setCancelingId(saleId);
+
+    try {
+      const { error } = await supabase.rpc('cancel_order', {
+        p_sale_id: saleId,
+      });
+
+      if (error) throw error;
+
+      await loadData();
+      Alert.alert('Order dibatalkan', 'Transaksi sudah dihapus dari recap.');
+    } catch (error) {
+      console.error('cancel_order gagal:', error);
+      Alert.alert('Order gagal dibatalkan', getErrorMessage(error));
+    } finally {
+      setCancelingId(null);
     }
   }
 
@@ -279,12 +340,21 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
             </Text>
           </View>
         </ScrollView>
-      ) : (
+      ) : activeTab === 'order' ? (
         <OrderScreen
           menus={menus}
           submitting={submitting}
           onAddMenu={() => setMenuFormVisible(true)}
           onSubmit={submitOrder}
+        />
+      ) : (
+        <OrderHistoryScreen
+          orders={orderHistory}
+          loading={loading}
+          refreshing={refreshing}
+          cancelingId={cancelingId}
+          onRefresh={() => loadData(true)}
+          onCancel={cancelOrder}
         />
       )}
 
@@ -303,6 +373,14 @@ export default function Dashboard({ session, business, onSignOut }: Props) {
         >
           <Text style={[styles.navText, activeTab === 'order' && styles.navTextActive]}>
             Orderan
+          </Text>
+        </Pressable>
+        <Pressable
+          style={[styles.navButton, activeTab === 'history' && styles.navButtonActive]}
+          onPress={() => setActiveTab('history')}
+        >
+          <Text style={[styles.navText, activeTab === 'history' && styles.navTextActive]}>
+            Riwayat
           </Text>
         </Pressable>
       </View>
